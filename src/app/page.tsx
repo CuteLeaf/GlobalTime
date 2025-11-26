@@ -41,21 +41,11 @@ export default function Home() {
     <main className="map-wrapper">
       <WorldMap />
       
-      {/* Header */}
-      <header className="header">
-        <div className="brand">
-          <span className="brand-icon">🌍</span>
-          <div className="brand-text">
-            <h1>World Timezone</h1>
-            <p>实时世界时区地图</p>
-          </div>
-        </div>
-        
-        <div className="local-time">
-          <div className="time">{localTime}</div>
-          <div className="label">本地时间 · {localDate}</div>
-        </div>
-      </header>
+      {/* 右上角本地时间 */}
+      <div className="local-time-panel">
+        <div className="time">{localTime}</div>
+        <div className="label">本地时间 · {localDate}</div>
+      </div>
     </main>
   );
 }

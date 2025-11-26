@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { timezoneCities, TimezoneCity } from "@/data/timezones";
+import SearchBox from "./SearchBox";
 
-// 计算相对于用户当前日期的标签
+// 存储键
+const STORAGE_KEY = "world-timezone-state";
+
+// 获取相对日期标签
 function getRelativeDayLabel(targetDate: Date): string {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -15,65 +19,30 @@ function getRelativeDayLabel(targetDate: Date): string {
   if (diffDays === 0) return "";
   if (diffDays === 1) return "明天";
   if (diffDays === -1) return "昨天";
-  if (diffDays === 2) return "后天";
-  if (diffDays === -2) return "前天";
   return diffDays > 0 ? `+${diffDays}天` : `${diffDays}天`;
 }
 
-function formatTimeForOffset(lng: number): { time: string; date: string; offset: string; dayLabel: string } {
-  const offsetHours = Math.round(lng / 15);
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const localTime = new Date(utc + offsetHours * 3600000);
-  
-  const time = localTime.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-  const date = localTime.toLocaleDateString("zh-CN", { month: "short", day: "numeric", weekday: "short" });
-  const sign = offsetHours >= 0 ? "+" : "";
-  const offset = `UTC${sign}${offsetHours}`;
-  const dayLabel = getRelativeDayLabel(localTime);
-  
-  return { time, date, offset, dayLabel };
-}
-
-interface TimeInfo {
-  time: string;
-  date: string;
-  isDay: boolean;
-  offset: string;
-  dayLabel: string;
-  timeDiff: string;
-}
-
-function formatTime(timezone: string): TimeInfo {
+// 格式化时间信息
+function formatTime(timezone: string) {
   const now = new Date();
   const tzDate = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
   
   const time = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
+    timeZone: timezone, hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   }).format(now);
   
   const date = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: timezone,
-    month: "numeric",
-    day: "numeric",
-    weekday: "short",
+    timeZone: timezone, month: "numeric", day: "numeric", weekday: "short",
   }).format(now);
   
   const hour = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hour12: false }).format(now));
   const isDay = hour >= 6 && hour < 18;
-
+  
   const utcDate = new Date(now.toLocaleString("en-US", { timeZone: "UTC" }));
   const diff = (tzDate.getTime() - utcDate.getTime()) / (1000 * 60 * 60);
-  const sign = diff >= 0 ? "+" : "";
-  const offset = `UTC${sign}${diff}`;
+  const offset = `UTC${diff >= 0 ? "+" : ""}${diff}`;
   
   const dayLabel = getRelativeDayLabel(tzDate);
-  
-  // 计算与本地时间的差异
   const localOffset = -now.getTimezoneOffset() / 60;
   const hourDiff = diff - localOffset;
   const timeDiff = hourDiff === 0 ? "同步" : (hourDiff > 0 ? `+${hourDiff}h` : `${hourDiff}h`);
@@ -81,16 +50,39 @@ function formatTime(timezone: string): TimeInfo {
   return { time, date, isDay, offset, dayLabel, timeDiff };
 }
 
+function formatTimeForOffset(lng: number) {
+  const offsetHours = Math.round(lng / 15);
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const localTime = new Date(utc + offsetHours * 3600000);
+  
+  return {
+    time: localTime.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
+    date: localTime.toLocaleDateString("zh-CN", { month: "short", day: "numeric", weekday: "short" }),
+    offset: `UTC${offsetHours >= 0 ? "+" : ""}${offsetHours}`,
+    dayLabel: getRelativeDayLabel(localTime),
+  };
+}
 
-function getDefaultLocation(): { lat: number; lng: number; zoom: number } {
+
+function getDefaultLocation() {
+  // 尝试从 localStorage 恢复
+  if (typeof window !== "undefined") {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const { center, zoom } = JSON.parse(saved);
+        if (center && zoom) return { lat: center[1], lng: center[0], zoom };
+      }
+    } catch {}
+  }
+  
   if (typeof navigator === "undefined") return { lat: 25, lng: 0, zoom: 1.5 };
   
   const lang = navigator.language.toLowerCase();
   const locationMap: Record<string, { lat: number; lng: number; zoom: number }> = {
     "zh": { lat: 35, lng: 105, zoom: 3 },
     "zh-cn": { lat: 35, lng: 105, zoom: 3 },
-    "zh-tw": { lat: 23.5, lng: 121, zoom: 4 },
-    "zh-hk": { lat: 22.3, lng: 114, zoom: 5 },
     "ja": { lat: 36, lng: 138, zoom: 4 },
     "ko": { lat: 36, lng: 128, zoom: 4 },
     "en": { lat: 40, lng: -100, zoom: 3 },
@@ -100,46 +92,7 @@ function getDefaultLocation(): { lat: number; lng: number; zoom: number } {
     "fr": { lat: 46, lng: 2, zoom: 4 },
   };
   
-  if (locationMap[lang]) return locationMap[lang];
-  const prefix = lang.split("-")[0];
-  if (locationMap[prefix]) return locationMap[prefix];
-  return { lat: 25, lng: 0, zoom: 1.5 };
-}
-
-// 创建城市标记
-function createMarkerElement(city: TimezoneCity): HTMLDivElement {
-  const el = document.createElement("div");
-  el.className = "city-marker-container";
-  
-  const updateMarker = () => {
-    const info = formatTime(city.timezone);
-    const innerColor = info.isDay ? "#f59e0b" : "#6366f1";
-    
-    // 只有明天/昨天才显示外圈
-    let ringClass = "";
-    let showRing = false;
-    if (info.dayLabel) {
-      showRing = true;
-      if (info.dayLabel.includes("明") || info.dayLabel.includes("+")) {
-        ringClass = "tomorrow";
-      } else {
-        ringClass = "yesterday";
-      }
-    }
-    
-    el.innerHTML = `
-      <div class="marker-wrapper ${ringClass}">
-        ${showRing ? `<div class="marker-ring"></div>` : ""}
-        <div class="marker-dot" style="background: ${innerColor}; box-shadow: 0 0 10px ${innerColor};"></div>
-      </div>
-    `;
-  };
-  
-  updateMarker();
-  const interval = setInterval(updateMarker, 1000);
-  el.dataset.intervalId = String(interval);
-  
-  return el;
+  return locationMap[lang] || locationMap[lang.split("-")[0]] || { lat: 25, lng: 0, zoom: 1.5 };
 }
 
 // 创建弹窗内容
@@ -153,7 +106,7 @@ function createPopupContent(city: TimezoneCity): string {
         <div class="status-dot ${info.isDay ? "day" : "night"}"></div>
         <div class="city-info">
           <span class="city-name">${city.name}</span>
-          <span class="country-name">${city.country}</span>
+          <span class="country-name">${city.nameEn} · ${city.country}</span>
         </div>
         ${info.dayLabel ? `<span class="popup-day-label ${labelClass}">${info.dayLabel}</span>` : ""}
       </div>
@@ -171,120 +124,165 @@ function createPopupContent(city: TimezoneCity): string {
 }
 
 
+interface MarkerData {
+  marker: maplibregl.Marker;
+  popup: maplibregl.Popup;
+  city: TimezoneCity;
+  element: HTMLDivElement;
+}
+
 export default function WorldMap() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<maplibregl.Marker[]>([]);
-  const popupsRef = useRef<maplibregl.Popup[]>([]);
+  const markersRef = useRef<MarkerData[]>([]);
+  const updateIntervalRef = useRef<number | null>(null);
   
   const [mounted, setMounted] = useState(false);
   const [mouseInfo, setMouseInfo] = useState<{ lat: number; lng: number; time: string; date: string; offset: string; dayLabel: string } | null>(null);
+  const [zoom, setZoom] = useState(1.5);
 
   useEffect(() => { setMounted(true); }, []);
+
+  // 统一更新所有标记（性能优化：单个定时器）
+  const updateAllMarkers = useCallback(() => {
+    markersRef.current.forEach(({ element, city }) => {
+      const info = formatTime(city.timezone);
+      const innerColor = info.isDay ? "#f59e0b" : "#6366f1";
+      let ringClass = "";
+      let showRing = false;
+      
+      if (info.dayLabel) {
+        showRing = true;
+        ringClass = info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday";
+      }
+      
+      element.innerHTML = `
+        <div class="marker-wrapper ${ringClass}">
+          ${showRing ? `<div class="marker-ring"></div>` : ""}
+          <div class="marker-dot" style="background: ${innerColor}; box-shadow: 0 0 10px ${innerColor};"></div>
+        </div>
+      `;
+    });
+  }, []);
+
+  // 飞到指定城市
+  const flyToCity = useCallback((city: TimezoneCity) => {
+    if (!map.current) return;
+    map.current.flyTo({ center: [city.lng, city.lat], zoom: 5, duration: 1500 });
+    
+    // 显示弹窗
+    const markerData = markersRef.current.find(m => m.city.id === city.id);
+    if (markerData) {
+      markerData.popup.setHTML(createPopupContent(city)).setLngLat([city.lng, city.lat]).addTo(map.current);
+    }
+  }, []);
+
+  // 保存地图状态
+  const saveMapState = useCallback(() => {
+    if (!map.current) return;
+    const center = map.current.getCenter();
+    const zoom = map.current.getZoom();
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ center: [center.lng, center.lat], zoom }));
+    } catch {}
+  }, []);
+
 
   // 初始化地图
   useEffect(() => {
     if (!mounted || !mapContainer.current || map.current) return;
 
     const defaultLoc = getDefaultLocation();
+    const hasSavedState = typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY);
     
     map.current = new maplibregl.Map({
       container: mapContainer.current,
       style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-      center: [0, 25],
-      zoom: 1.5,
+      center: hasSavedState ? [defaultLoc.lng, defaultLoc.lat] : [0, 25],
+      zoom: hasSavedState ? defaultLoc.zoom : 1.5,
       minZoom: 1.5,
-      maxZoom: 8,
+      maxZoom: 10,
     });
 
     const m = map.current;
 
     m.on("load", () => {
-      // 添加时区线（仅普通时区线，不再特殊处理日期变更线）
+      // 时区线
       const timezoneLines: GeoJSON.Feature[] = [];
       for (let lng = -180; lng <= 180; lng += 15) {
         timezoneLines.push({
-          type: "Feature",
-          properties: {},
-          geometry: {
-            type: "LineString",
-            coordinates: [[lng, -85], [lng, 85]],
-          },
+          type: "Feature", properties: {},
+          geometry: { type: "LineString", coordinates: [[lng, -85], [lng, 85]] },
         });
       }
-
-      m.addSource("timezone-lines", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: timezoneLines },
-      });
-
+      m.addSource("timezone-lines", { type: "geojson", data: { type: "FeatureCollection", features: timezoneLines } });
       m.addLayer({
-        id: "timezone-lines",
-        type: "line",
-        source: "timezone-lines",
-        paint: {
-          "line-color": "rgba(255, 255, 255, 0.1)",
-          "line-width": 1,
-          "line-dasharray": [2, 4],
-        },
+        id: "timezone-lines", type: "line", source: "timezone-lines",
+        paint: { "line-color": "rgba(255, 255, 255, 0.08)", "line-width": 1, "line-dasharray": [2, 4] },
       });
 
-      // 添加城市标记
+      // 城市标记
       timezoneCities.forEach((city) => {
-        const el = createMarkerElement(city);
-        const popup = new maplibregl.Popup({
-          offset: 15,
-          closeButton: false,
-          className: "city-popup",
-        });
-
-        const marker = new maplibregl.Marker({ element: el })
-          .setLngLat([city.lng, city.lat])
-          .addTo(m);
+        const el = document.createElement("div");
+        el.className = "city-marker-container";
+        el.dataset.name = city.name;
+        
+        const popup = new maplibregl.Popup({ offset: 15, closeButton: false, className: "city-popup" });
+        const marker = new maplibregl.Marker({ element: el }).setLngLat([city.lng, city.lat]).addTo(m);
 
         el.addEventListener("mouseenter", () => {
           popup.setHTML(createPopupContent(city)).setLngLat([city.lng, city.lat]).addTo(m);
         });
-        el.addEventListener("mouseleave", () => {
-          popup.remove();
-        });
+        el.addEventListener("mouseleave", () => popup.remove());
 
-        markersRef.current.push(marker);
-        popupsRef.current.push(popup);
+        markersRef.current.push({ marker, popup, city, element: el });
       });
 
-      // 飞到默认位置
-      setTimeout(() => {
-        m.flyTo({
-          center: [defaultLoc.lng, defaultLoc.lat],
-          zoom: defaultLoc.zoom,
-          duration: 2000,
-        });
-      }, 500);
+      // 初始更新
+      updateAllMarkers();
+
+      // 飞到默认位置（如果没有保存状态）
+      if (!hasSavedState) {
+        setTimeout(() => {
+          m.flyTo({ center: [defaultLoc.lng, defaultLoc.lat], zoom: defaultLoc.zoom, duration: 2000 });
+        }, 500);
+      }
     });
 
-    // 鼠标移动事件
+    // 事件监听
     m.on("mousemove", (e) => {
       const { lng, lat } = e.lngLat;
       setMouseInfo({ lat, lng, ...formatTimeForOffset(lng) });
     });
-
-    m.on("mouseout", () => {
-      setMouseInfo(null);
+    m.on("mouseout", () => setMouseInfo(null));
+    m.on("zoomend", () => {
+      setZoom(m.getZoom());
+      saveMapState();
     });
+    m.on("moveend", saveMapState);
+
+    // 键盘快捷键
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.key === "=" || e.key === "+") m.zoomIn();
+      else if (e.key === "-") m.zoomOut();
+      else if (e.key === "0") m.flyTo({ center: [0, 25], zoom: 1.5, duration: 1000 });
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    // 统一定时器更新所有标记
+    updateIntervalRef.current = window.setInterval(updateAllMarkers, 1000);
 
     return () => {
-      markersRef.current.forEach((marker) => {
-        const el = marker.getElement();
-        const intervalId = el.dataset.intervalId;
-        if (intervalId) clearInterval(Number(intervalId));
-        marker.remove();
-      });
-      popupsRef.current.forEach((popup) => popup.remove());
+      window.removeEventListener("keydown", handleKeyDown);
+      if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
+      markersRef.current.forEach(({ marker, popup }) => { marker.remove(); popup.remove(); });
+      markersRef.current = [];
       m.remove();
       map.current = null;
     };
-  }, [mounted]);
+  }, [mounted, updateAllMarkers, saveMapState]);
+
 
   if (!mounted) {
     return (
@@ -298,6 +296,11 @@ export default function WorldMap() {
   return (
     <div className="map-wrapper">
       <div ref={mapContainer} className="map-container" />
+
+      {/* 搜索框 */}
+      <div className="search-container">
+        <SearchBox onSelect={flyToCity} />
+      </div>
 
       {/* 鼠标跟随信息 */}
       {mouseInfo && (
@@ -317,6 +320,24 @@ export default function WorldMap() {
         </div>
       )}
 
+      {/* 缩放级别显示城市名 */}
+      {zoom >= 4 && (
+        <style>{`
+          .city-marker-container::after {
+            content: attr(data-name);
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: rgba(255,255,255,0.8);
+            white-space: nowrap;
+            margin-top: 2px;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+          }
+        `}</style>
+      )}
+
       {/* 图例 */}
       <div className="legend">
         <div className="legend-item">
@@ -329,19 +350,19 @@ export default function WorldMap() {
         </div>
         <div className="legend-divider" />
         <div className="legend-item">
-          <span className="legend-combo tomorrow">
-            <span className="combo-ring" />
-            <span className="combo-dot" />
-          </span>
+          <span className="legend-combo tomorrow"><span className="combo-ring" /><span className="combo-dot" /></span>
           <span>明天</span>
         </div>
         <div className="legend-item">
-          <span className="legend-combo yesterday">
-            <span className="combo-ring" />
-            <span className="combo-dot" />
-          </span>
+          <span className="legend-combo yesterday"><span className="combo-ring" /><span className="combo-dot" /></span>
           <span>昨天</span>
         </div>
+      </div>
+
+      {/* 快捷键提示 */}
+      <div className="shortcuts-hint">
+        <span>+/- 缩放</span>
+        <span>0 重置</span>
       </div>
     </div>
   );
