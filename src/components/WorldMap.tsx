@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { timezoneCities, TimezoneCity } from "@/data/timezones";
+import { featuredCities, TimezoneCity } from "@/data/timezones";
 import SearchBox from "./SearchBox";
 import { syncTime, getNow } from "@/utils/timeSync";
 
@@ -230,12 +230,74 @@ export default function WorldMap() {
     if (!map.current) return;
     map.current.flyTo({ center: [city.lng, city.lat], zoom: 5, duration: 1500 });
     
-    // 显示弹窗
-    const markerData = markersRef.current.find(m => m.city.id === city.id);
-    if (markerData) {
-      const isMobile = window.innerWidth < 768;
-      markerData.popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(map.current);
+    // 查找是否已有标记
+    let markerData = markersRef.current.find(m => m.city.id === city.id);
+    
+    // 如果没有标记，动态创建一个
+    if (!markerData) {
+      const el = document.createElement("div");
+      el.className = "city-marker-container";
+      el.dataset.name = city.name;
+      
+      const popup = new maplibregl.Popup({ offset: 15, closeButton: false, className: "city-popup" });
+      const marker = new maplibregl.Marker({ element: el }).setLngLat([city.lng, city.lat]).addTo(map.current);
+
+      let isPopupOpen = false;
+
+      // 桌面端：悬停显示
+      el.addEventListener("mouseenter", () => {
+        if (!isPopupOpen) {
+          const isMobile = window.innerWidth < 768;
+          popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(map.current!);
+        }
+      });
+      el.addEventListener("mouseleave", () => {
+        if (!isPopupOpen) {
+          popup.remove();
+        }
+      });
+
+      // 移动端：点击切换
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (isPopupOpen) {
+          popup.remove();
+          isPopupOpen = false;
+        } else {
+          markersRef.current.forEach(({ popup: p }) => p.remove());
+          const isMobile = window.innerWidth < 768;
+          popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(map.current!);
+          isPopupOpen = true;
+        }
+      });
+
+      popup.on("close", () => {
+        isPopupOpen = false;
+      });
+
+      markerData = { marker, popup, city, element: el };
+      markersRef.current.push(markerData);
+      
+      // 立即更新新标记的样式
+      const info = formatTime(city.timezone);
+      const innerColor = info.isDay ? "#fbbf24" : "#818cf8";
+      const ringClass = info.dayLabel 
+        ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday")
+        : "";
+      
+      el.dataset.ringClass = ringClass;
+      el.dataset.isDay = info.isDay ? "1" : "0";
+      el.innerHTML = `
+        <div class="marker-wrapper ${ringClass}">
+          ${ringClass ? `<div class="marker-ring"></div>` : ""}
+          <div class="marker-dot" style="background: ${innerColor}; box-shadow: 0 0 12px ${innerColor};"></div>
+        </div>
+      `;
     }
+    
+    // 显示弹窗
+    const isMobile = window.innerWidth < 768;
+    markerData.popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(map.current);
   }, []);
 
   // 保存地图状态
@@ -361,8 +423,8 @@ export default function WorldMap() {
         },
       });
 
-      // 城市标记
-      timezoneCities.forEach((city) => {
+      // 城市标记（使用精选城市）
+      featuredCities.forEach((city) => {
         const el = document.createElement("div");
         el.className = "city-marker-container";
         el.dataset.name = city.name;
