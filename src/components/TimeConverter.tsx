@@ -262,7 +262,7 @@ export default function TimeConverter() {
   return (
     <div className="time-converter">
       <div className="converter-header">
-        <h2>🕐 时区转换器</h2>
+        <h2><span className="title-icon">🕐</span> 时区转换器</h2>
         <p>快速知道游戏发售、活动开始在你的时区是什么时候</p>
       </div>
 

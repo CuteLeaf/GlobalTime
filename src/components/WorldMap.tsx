@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { Map, Marker, Popup, Source, Layer, MapRef } from "react-map-gl/maplibre";
+import type { MapLayerMouseEvent, ViewStateChangeEvent } from "react-map-gl/maplibre";
+import type { SymbolLayerSpecification, LineLayerSpecification } from "maplibre-gl";
 import { featuredCities, TimezoneCity } from "@/data/timezones";
 import SearchBox from "./SearchBox";
 import { syncTime, getNow } from "@/utils/timeSync";
@@ -25,7 +26,7 @@ function getRelativeDayLabel(targetDate: Date): string {
 
 // 格式化时间信息
 function formatTime(timezone: string) {
-  const now = getNow(); // 使用 NTP 校准后的时间
+  const now = getNow();
   const tzDate = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
   
   const time = new Intl.DateTimeFormat("zh-CN", {
@@ -53,7 +54,7 @@ function formatTime(timezone: string) {
 
 function formatTimeForOffset(lng: number) {
   const offsetHours = Math.round(lng / 15);
-  const now = getNow(); // 使用 NTP 校准后的时间
+  const now = getNow();
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   const localTime = new Date(utc + offsetHours * 3600000);
   
@@ -64,7 +65,6 @@ function formatTimeForOffset(lng: number) {
     dayLabel: getRelativeDayLabel(localTime),
   };
 }
-
 
 // 根据用户语言获取默认地区
 function getUserRegionLocation() {
@@ -87,7 +87,6 @@ function getUserRegionLocation() {
 }
 
 function getDefaultLocation() {
-  // 尝试从 localStorage 恢复
   if (typeof window !== "undefined") {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -97,445 +96,334 @@ function getDefaultLocation() {
       }
     } catch {}
   }
-  
   return getUserRegionLocation();
 }
 
-// 创建弹窗内容
-function createPopupContent(city: TimezoneCity, isMobile: boolean): string {
-  const info = formatTime(city.timezone);
-  const labelClass = info.dayLabel ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday") : "";
+// 获取语言字段
+function getLabelField(): string {
+  if (typeof navigator === "undefined") return "name:en";
+  const fullLang = navigator.language.toLowerCase();
+  const baseLang = fullLang.split("-")[0];
   
-  return `
-    <div class="popup-content">
-      ${isMobile ? '<button class="popup-close" onclick="this.closest(\'.maplibregl-popup\').remove()">✕</button>' : ""}
-      <div class="popup-header">
-        <div class="status-dot ${info.isDay ? "day" : "night"}"></div>
-        <div class="city-info">
-          <span class="city-name">${city.name}</span>
-          <span class="country-name">${city.nameEn} · ${city.country}</span>
+  if (fullLang === "zh-tw" || fullLang === "zh-hk" || fullLang === "zh-hant") {
+    return "name:zh-Hant";
+  }
+  if (baseLang === "zh") {
+    return "name:zh-Hans";
+  }
+  const langMap: Record<string, string> = {
+    ja: "name:ja", ko: "name:ko", en: "name:en", de: "name:de",
+    fr: "name:fr", es: "name:es", pt: "name:pt", ru: "name:ru", ar: "name:ar",
+  };
+  return langMap[baseLang] || "name:en";
+}
+
+
+// 城市标记组件
+interface CityMarkerProps {
+  city: TimezoneCity;
+  isSelected: boolean;
+  onClick: (city: TimezoneCity) => void;
+  onHover: (city: TimezoneCity | null) => void;
+}
+
+function CityMarker({ city, isSelected, onClick, onHover }: CityMarkerProps) {
+  const [info, setInfo] = useState(() => formatTime(city.timezone));
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setInfo(formatTime(city.timezone));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [city.timezone]);
+  
+  const innerColor = info.isDay ? "#fbbf24" : "#818cf8";
+  const ringClass = info.dayLabel 
+    ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday")
+    : "";
+  
+  return (
+    <Marker
+      longitude={city.lng}
+      latitude={city.lat}
+      anchor="center"
+      onClick={(e) => {
+        e.originalEvent.stopPropagation();
+        onClick(city);
+      }}
+    >
+      <div 
+        className="city-marker-container"
+        data-name={city.name}
+        onMouseEnter={() => onHover(city)}
+        onMouseLeave={() => !isSelected && onHover(null)}
+      >
+        <div className={`marker-wrapper ${ringClass}`}>
+          {ringClass && <div className="marker-ring" />}
+          <div 
+            className="marker-dot" 
+            style={{ background: innerColor, boxShadow: `0 0 12px ${innerColor}` }}
+          />
         </div>
-        ${info.dayLabel ? `<span class="popup-day-label ${labelClass}">${info.dayLabel}</span>` : ""}
       </div>
-      <div class="time-display">
-        <span class="time">${info.time}</span>
-        <span class="date">${info.date}</span>
+    </Marker>
+  );
+}
+
+// 弹窗内容组件
+interface PopupContentProps {
+  city: TimezoneCity;
+  onClose: () => void;
+  isMobile: boolean;
+}
+
+function PopupContent({ city, onClose, isMobile }: PopupContentProps) {
+  const [info, setInfo] = useState(() => formatTime(city.timezone));
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setInfo(formatTime(city.timezone));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [city.timezone]);
+  
+  const labelClass = info.dayLabel 
+    ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday") 
+    : "";
+  
+  return (
+    <div className="popup-content">
+      {isMobile && (
+        <button className="popup-close" onClick={onClose}>✕</button>
+      )}
+      <div className="popup-header">
+        <div className={`status-dot ${info.isDay ? "day" : "night"}`} />
+        <div className="city-info">
+          <span className="city-name">{city.name}</span>
+          <span className="country-name">{city.nameEn} · {city.country}</span>
+        </div>
+        {info.dayLabel && (
+          <span className={`popup-day-label ${labelClass}`}>{info.dayLabel}</span>
+        )}
       </div>
-      <div class="popup-footer">
-        <span class="offset">${info.offset}</span>
-        <span class="time-diff">${info.timeDiff}</span>
-        <span class="day-night">${info.isDay ? "☀️" : "🌙"}</span>
+      <div className="time-display">
+        <span className="time">{info.time}</span>
+        <span className="date">{info.date}</span>
+      </div>
+      <div className="popup-footer">
+        <span className="offset">{info.offset}</span>
+        <span className="time-diff">{info.timeDiff}</span>
+        <span className="day-night">{info.isDay ? "☀️" : "🌙"}</span>
       </div>
     </div>
-  `;
+  );
 }
 
-
-interface MarkerData {
-  marker: maplibregl.Marker;
-  popup: maplibregl.Popup;
-  city: TimezoneCity;
-  element: HTMLDivElement;
-}
 
 export default function WorldMap() {
-  const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<MarkerData[]>([]);
-  const updateIntervalRef = useRef<number | null>(null);
-  const mouseLngRef = useRef<{ lng: number; lat: number } | null>(null);
-  
+  const mapRef = useRef<MapRef>(null);
   const [mounted, setMounted] = useState(false);
+  const [viewState, setViewState] = useState(() => {
+    const loc = getDefaultLocation();
+    return { longitude: loc.lng, latitude: loc.lat, zoom: loc.zoom };
+  });
   const [mouseInfo, setMouseInfo] = useState<{ lat: number; lng: number; time: string; date: string; offset: string; dayLabel: string } | null>(null);
-  const [zoom, setZoom] = useState(1.5);
+  const mousePosRef = useRef<{ lng: number; lat: number } | null>(null);
+  const [selectedCity, setSelectedCity] = useState<TimezoneCity | null>(null);
+  const [hoveredCity, setHoveredCity] = useState<TimezoneCity | null>(null);
+  const [dynamicCities, setDynamicCities] = useState<TimezoneCity[]>([]);
+  const [timezoneLabelsData, setTimezoneLabelsData] = useState<GeoJSON.FeatureCollection | null>(null);
+  
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  
+  // 所有显示的城市（精选 + 动态添加）
+  const allCities = useMemo(() => {
+    const cityIds = new Set(featuredCities.map(c => c.id));
+    const uniqueDynamic = dynamicCities.filter(c => !cityIds.has(c.id));
+    return [...featuredCities, ...uniqueDynamic];
+  }, [dynamicCities]);
 
   useEffect(() => { 
     setMounted(true);
-    // 页面加载时同步 NTP 时间
     syncTime();
   }, []);
 
-  // 更新时区标签位置和时间
+  // 时区线数据
+  const timezoneLines = useMemo<GeoJSON.FeatureCollection>(() => {
+    const features: GeoJSON.Feature[] = [];
+    for (let lng = -180; lng <= 180; lng += 15) {
+      const offset = lng / 15;
+      features.push({
+        type: "Feature",
+        properties: { offset: offset >= 0 ? `+${offset}` : `${offset}` },
+        geometry: { type: "LineString", coordinates: [[lng, -85], [lng, 85]] },
+      });
+    }
+    return { type: "FeatureCollection", features };
+  }, []);
+
+  // 时区线样式
+  const timezoneLineLayer: Omit<LineLayerSpecification, "source"> = useMemo(() => ({
+    id: "timezone-lines",
+    type: "line",
+    paint: { "line-color": "rgba(255, 255, 255, 0.1)", "line-width": 1, "line-dasharray": [3, 6] },
+  }), []);
+
+  // 时区标签样式
+  const timezoneLabelLayer: Omit<SymbolLayerSpecification, "source"> = useMemo(() => ({
+    id: "timezone-labels",
+    type: "symbol",
+    layout: {
+      "text-field": ["get", "offset"],
+      "text-size": 10,
+      "text-anchor": "center",
+      "text-allow-overlap": true,
+      "text-line-height": 1.3,
+      "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"],
+    },
+    paint: {
+      "text-color": "rgba(255, 255, 255, 0.6)",
+      "text-halo-color": "rgba(0, 0, 0, 0.9)",
+      "text-halo-width": 1.5,
+    },
+  }), []);
+
+  // 更新时区标签位置
   const updateTimezoneLabels = useCallback(() => {
-    if (!map.current || !map.current.getSource("timezone-labels")) return;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
     
-    const bounds = map.current.getBounds();
-    const topLat = Math.min(bounds.getNorth() - 5, 80); // 距离顶部留一点边距
+    const bounds = map.getBounds();
+    const topLat = Math.min(bounds.getNorth() - 5, 80);
     
-    const timezoneLabels: GeoJSON.Feature[] = [];
+    const features: GeoJSON.Feature[] = [];
     for (let lng = -180; lng <= 180; lng += 15) {
       const offset = lng / 15;
       const offsetStr = offset >= 0 ? `+${offset}` : `${offset}`;
       const timeInfo = formatTimeForOffset(lng);
       
-      timezoneLabels.push({
+      features.push({
         type: "Feature",
-        properties: { 
-          offset: `UTC${offsetStr}\n${timeInfo.time.slice(0, 5)}`,
-          lng: lng,
-        },
+        properties: { offset: `UTC${offsetStr}\n${timeInfo.time.slice(0, 5)}`, lng },
         geometry: { type: "Point", coordinates: [lng, topLat] },
       });
     }
     
-    (map.current.getSource("timezone-labels") as maplibregl.GeoJSONSource).setData({
-      type: "FeatureCollection",
-      features: timezoneLabels,
-    });
+    setTimezoneLabelsData({ type: "FeatureCollection", features });
   }, []);
 
-  // 统一更新所有标记和弹窗（性能优化：单个定时器）
-  const updateAllMarkers = useCallback(() => {
-    markersRef.current.forEach(({ element, city, popup }) => {
-      const info = formatTime(city.timezone);
-      const innerColor = info.isDay ? "#fbbf24" : "#818cf8";
-      const ringClass = info.dayLabel 
-        ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday")
-        : "";
-      
-      // 更新标记（仅在状态变化时）
-      const currentClass = element.dataset.ringClass || "";
-      const currentDay = element.dataset.isDay || "";
-      const newDay = info.isDay ? "1" : "0";
-      
-      if (currentClass !== ringClass || currentDay !== newDay) {
-        element.dataset.ringClass = ringClass;
-        element.dataset.isDay = newDay;
-        element.innerHTML = `
-          <div class="marker-wrapper ${ringClass}">
-            ${ringClass ? `<div class="marker-ring"></div>` : ""}
-            <div class="marker-dot" style="background: ${innerColor}; box-shadow: 0 0 12px ${innerColor};"></div>
-          </div>
-        `;
-      }
-      
-      // 更新打开的弹窗时间
-      if (popup.isOpen()) {
-        const timeEl = popup.getElement()?.querySelector(".time-display .time");
-        if (timeEl) {
-          timeEl.textContent = info.time;
-        }
-      }
-    });
-    
-    // 更新鼠标位置时间面板
-    if (mouseLngRef.current) {
-      const { lng, lat } = mouseLngRef.current;
-      setMouseInfo({ lat, lng, ...formatTimeForOffset(lng) });
-    }
-  }, []);
-
-  // 飞到指定城市
-  const flyToCity = useCallback((city: TimezoneCity) => {
-    if (!map.current) return;
-    map.current.flyTo({ center: [city.lng, city.lat], zoom: 5, duration: 1500 });
-    
-    // 查找是否已有标记
-    let markerData = markersRef.current.find(m => m.city.id === city.id);
-    
-    // 如果没有标记，动态创建一个
-    if (!markerData) {
-      const el = document.createElement("div");
-      el.className = "city-marker-container";
-      el.dataset.name = city.name;
-      
-      const popup = new maplibregl.Popup({ offset: 15, closeButton: false, className: "city-popup" });
-      const marker = new maplibregl.Marker({ element: el }).setLngLat([city.lng, city.lat]).addTo(map.current);
-
-      let isPopupOpen = false;
-
-      // 桌面端：悬停显示
-      el.addEventListener("mouseenter", () => {
-        if (!isPopupOpen) {
-          const isMobile = window.innerWidth < 768;
-          popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(map.current!);
-        }
-      });
-      el.addEventListener("mouseleave", () => {
-        if (!isPopupOpen) {
-          popup.remove();
-        }
-      });
-
-      // 移动端：点击切换
-      el.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (isPopupOpen) {
-          popup.remove();
-          isPopupOpen = false;
-        } else {
-          markersRef.current.forEach(({ popup: p }) => p.remove());
-          const isMobile = window.innerWidth < 768;
-          popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(map.current!);
-          isPopupOpen = true;
-        }
-      });
-
-      popup.on("close", () => {
-        isPopupOpen = false;
-      });
-
-      markerData = { marker, popup, city, element: el };
-      markersRef.current.push(markerData);
-      
-      // 立即更新新标记的样式
-      const info = formatTime(city.timezone);
-      const innerColor = info.isDay ? "#fbbf24" : "#818cf8";
-      const ringClass = info.dayLabel 
-        ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday")
-        : "";
-      
-      el.dataset.ringClass = ringClass;
-      el.dataset.isDay = info.isDay ? "1" : "0";
-      el.innerHTML = `
-        <div class="marker-wrapper ${ringClass}">
-          ${ringClass ? `<div class="marker-ring"></div>` : ""}
-          <div class="marker-dot" style="background: ${innerColor}; box-shadow: 0 0 12px ${innerColor};"></div>
-        </div>
-      `;
-    }
-    
-    // 显示弹窗
-    const isMobile = window.innerWidth < 768;
-    markerData.popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(map.current);
-  }, []);
+  // 定时更新时区标签时间
+  useEffect(() => {
+    if (!mounted) return;
+    const interval = setInterval(updateTimezoneLabels, 60000);
+    return () => clearInterval(interval);
+  }, [mounted, updateTimezoneLabels]);
 
   // 保存地图状态
   const saveMapState = useCallback(() => {
-    if (!map.current) return;
-    const center = map.current.getCenter();
-    const zoom = map.current.getZoom();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ center: [center.lng, center.lat], zoom }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        center: [viewState.longitude, viewState.latitude],
+        zoom: viewState.zoom,
+      }));
     } catch {}
+  }, [viewState]);
+
+  // 飞到指定城市
+  const flyToCity = useCallback((city: TimezoneCity) => {
+    mapRef.current?.flyTo({ center: [city.lng, city.lat], zoom: 5, duration: 1500 });
+    
+    // 如果不在列表中，动态添加
+    if (!featuredCities.find(c => c.id === city.id) && !dynamicCities.find(c => c.id === city.id)) {
+      setDynamicCities(prev => [...prev, city]);
+    }
+    
+    setSelectedCity(city);
+  }, [dynamicCities]);
+
+  // 处理鼠标移动
+  const handleMouseMove = useCallback((e: MapLayerMouseEvent) => {
+    const { lng, lat } = e.lngLat;
+    mousePosRef.current = { lng, lat };
+    setMouseInfo({ lat, lng, ...formatTimeForOffset(lng) });
   }, []);
 
-
-  // 初始化地图
+  // 实时更新鼠标位置的时间
   useEffect(() => {
-    if (!mounted || !mapContainer.current || map.current) return;
+    if (!mounted) return;
+    const interval = setInterval(() => {
+      if (mousePosRef.current) {
+        const { lng, lat } = mousePosRef.current;
+        setMouseInfo({ lat, lng, ...formatTimeForOffset(lng) });
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [mounted]);
 
-    const defaultLoc = getDefaultLocation();
-    const hasSavedState = typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY);
+  // 处理视图变化
+  const handleMove = useCallback((e: ViewStateChangeEvent) => {
+    setViewState(e.viewState);
+  }, []);
+
+  // 处理移动结束
+  const handleMoveEnd = useCallback(() => {
+    saveMapState();
+    updateTimezoneLabels();
+  }, [saveMapState, updateTimezoneLabels]);
+
+  // 处理地图加载
+  const handleLoad = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
     
-    map.current = new maplibregl.Map({
-      container: mapContainer.current,
-      style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-      center: hasSavedState ? [defaultLoc.lng, defaultLoc.lat] : [0, 25],
-      zoom: hasSavedState ? defaultLoc.zoom : 1.5,
-      minZoom: 1.5,
-      maxZoom: 10,
-    });
-
-    const m = map.current;
-
-    m.on("load", () => {
-      // 根据用户语言设置地图标签语言
-      const fullLang = navigator.language.toLowerCase();
-      const baseLang = fullLang.split("-")[0];
-      
-      // 获取语言字段，区分简繁体中文
-      const getLabelField = (): string => {
-        if (fullLang === "zh-tw" || fullLang === "zh-hk" || fullLang === "zh-hant") {
-          return "name:zh-Hant"; // 繁体中文
-        }
-        if (baseLang === "zh") {
-          return "name:zh-Hans"; // 简体中文
-        }
-        const langMap: Record<string, string> = {
-          ja: "name:ja",
-          ko: "name:ko",
-          en: "name:en",
-          de: "name:de",
-          fr: "name:fr",
-          es: "name:es",
-          pt: "name:pt",
-          ru: "name:ru",
-          ar: "name:ar",
-        };
-        return langMap[baseLang] || "name:en";
-      };
-      
-      const labelField = getLabelField();
-      
-      // 更新所有文字图层的语言
-      m.getStyle().layers.forEach((layer) => {
-        if (layer.type === "symbol" && layer.layout?.["text-field"]) {
-          m.setLayoutProperty(layer.id, "text-field", [
-            "coalesce",
-            ["get", labelField],
-            ["get", "name:zh"], // 回退到通用中文
-            ["get", "name:en"],
-            ["get", "name"]
-          ]);
-        }
-      });
-      
-      // 时区线和标签
-      const timezoneLines: GeoJSON.Feature[] = [];
-      const timezoneLabels: GeoJSON.Feature[] = [];
-      
-      for (let lng = -180; lng <= 180; lng += 15) {
-        const offset = lng / 15;
-        const offsetStr = offset >= 0 ? `+${offset}` : `${offset}`;
-        
-        timezoneLines.push({
-          type: "Feature",
-          properties: { offset: offsetStr },
-          geometry: { type: "LineString", coordinates: [[lng, -85], [lng, 85]] },
-        });
-        
-        // 在顶部添加时区标签
-        timezoneLabels.push({
-          type: "Feature",
-          properties: { 
-            offset: `UTC${offsetStr}`,
-            lng: lng,
-          },
-          geometry: { type: "Point", coordinates: [lng, 75] },
-        });
-      }
-      
-      m.addSource("timezone-lines", { type: "geojson", data: { type: "FeatureCollection", features: timezoneLines } });
-      m.addLayer({
-        id: "timezone-lines", type: "line", source: "timezone-lines",
-        paint: { "line-color": "rgba(255, 255, 255, 0.1)", "line-width": 1, "line-dasharray": [3, 6] },
-      });
-      
-      // 时区标签图层
-      m.addSource("timezone-labels", { type: "geojson", data: { type: "FeatureCollection", features: timezoneLabels } });
-      m.addLayer({
-        id: "timezone-labels",
-        type: "symbol",
-        source: "timezone-labels",
-        layout: {
-          "text-field": ["get", "offset"],
-          "text-size": 10,
-          "text-anchor": "center",
-          "text-allow-overlap": true,
-          "text-line-height": 1.3,
-          "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"],
-        },
-        paint: {
-          "text-color": "rgba(255, 255, 255, 0.6)",
-          "text-halo-color": "rgba(0, 0, 0, 0.9)",
-          "text-halo-width": 1.5,
-        },
-      });
-
-      // 城市标记（使用精选城市）
-      featuredCities.forEach((city) => {
-        const el = document.createElement("div");
-        el.className = "city-marker-container";
-        el.dataset.name = city.name;
-        
-        const popup = new maplibregl.Popup({ offset: 15, closeButton: false, className: "city-popup" });
-        const marker = new maplibregl.Marker({ element: el }).setLngLat([city.lng, city.lat]).addTo(m);
-
-        let isPopupOpen = false;
-
-        // 桌面端：悬停显示
-        el.addEventListener("mouseenter", () => {
-          if (!isPopupOpen) {
-            const isMobile = window.innerWidth < 768;
-            popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(m);
-          }
-        });
-        el.addEventListener("mouseleave", () => {
-          if (!isPopupOpen) {
-            popup.remove();
-          }
-        });
-
-        // 移动端：点击切换
-        el.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (isPopupOpen) {
-            popup.remove();
-            isPopupOpen = false;
-          } else {
-            // 关闭其他弹窗
-            markersRef.current.forEach(({ popup: p }) => p.remove());
-            const isMobile = window.innerWidth < 768;
-            popup.setHTML(createPopupContent(city, isMobile)).setLngLat([city.lng, city.lat]).addTo(m);
-            isPopupOpen = true;
-          }
-        });
-
-        // 弹窗关闭时重置状态
-        popup.on("close", () => {
-          isPopupOpen = false;
-        });
-
-        markersRef.current.push({ marker, popup, city, element: el });
-      });
-
-      // 初始更新
-      updateAllMarkers();
-      updateTimezoneLabels();
-
-      // 飞到默认位置（如果没有保存状态）
-      if (!hasSavedState) {
-        setTimeout(() => {
-          m.flyTo({ center: [defaultLoc.lng, defaultLoc.lat], zoom: defaultLoc.zoom, duration: 2000 });
-        }, 500);
+    const labelField = getLabelField();
+    
+    // 更新所有文字图层的语言
+    map.getStyle().layers.forEach((layer) => {
+      if (layer.type === "symbol" && layer.layout?.["text-field"]) {
+        map.setLayoutProperty(layer.id, "text-field", [
+          "coalesce",
+          ["get", labelField],
+          ["get", "name:zh"],
+          ["get", "name:en"],
+          ["get", "name"]
+        ]);
       }
     });
+    
+    updateTimezoneLabels();
+    
+    // 如果没有保存状态，飞到默认位置
+    const hasSavedState = typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY);
+    if (!hasSavedState) {
+      const defaultLoc = getUserRegionLocation();
+      setTimeout(() => {
+        mapRef.current?.flyTo({ center: [defaultLoc.lng, defaultLoc.lat], zoom: defaultLoc.zoom, duration: 2000 });
+      }, 500);
+    }
+  }, [updateTimezoneLabels]);
 
-    // 点击地图关闭所有弹窗
-    m.on("click", () => {
-      markersRef.current.forEach(({ popup }) => popup.remove());
-    });
-
-    // 事件监听
-    m.on("mousemove", (e) => {
-      const { lng, lat } = e.lngLat;
-      mouseLngRef.current = { lng, lat };
-      setMouseInfo({ lat, lng, ...formatTimeForOffset(lng) });
-    });
-    m.on("mouseout", () => {
-      mouseLngRef.current = null;
-      setMouseInfo(null);
-    });
-    m.on("zoomend", () => {
-      setZoom(m.getZoom());
-      saveMapState();
-      updateTimezoneLabels();
-    });
-    m.on("moveend", () => {
-      saveMapState();
-      updateTimezoneLabels();
-    });
-
-    // 键盘快捷键
+  // 键盘快捷键
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
-      if (e.key === "=" || e.key === "+") m.zoomIn();
-      else if (e.key === "-") m.zoomOut();
+      const map = mapRef.current;
+      if (!map) return;
+      
+      if (e.key === "=" || e.key === "+") map.zoomIn();
+      else if (e.key === "-") map.zoomOut();
       else if (e.key === "0") {
-        // 重置：清除 localStorage 并飞到用户当前地区
         try { localStorage.removeItem(STORAGE_KEY); } catch {}
         const userLoc = getUserRegionLocation();
-        m.flyTo({ center: [userLoc.lng, userLoc.lat], zoom: userLoc.zoom, duration: 2000 });
+        map.flyTo({ center: [userLoc.lng, userLoc.lat], zoom: userLoc.zoom, duration: 2000 });
       }
     };
     window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
-    // 定时器：标记每秒更新，时区标签每分钟更新
-    updateIntervalRef.current = window.setInterval(updateAllMarkers, 1000);
-    const labelIntervalId = window.setInterval(updateTimezoneLabels, 60000);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
-      clearInterval(labelIntervalId);
-      markersRef.current.forEach(({ marker, popup }) => { marker.remove(); popup.remove(); });
-      markersRef.current = [];
-      m.remove();
-      map.current = null;
-    };
-  }, [mounted, updateAllMarkers, updateTimezoneLabels, saveMapState]);
-
+  // 当前显示的弹窗城市
+  const popupCity = selectedCity || hoveredCity;
 
   if (!mounted) {
     return (
@@ -548,7 +436,70 @@ export default function WorldMap() {
 
   return (
     <div className="map-wrapper">
-      <div ref={mapContainer} className="map-container" />
+      <Map
+        ref={mapRef}
+        {...viewState}
+        onMove={handleMove}
+        onMoveEnd={handleMoveEnd}
+        onMouseMove={handleMouseMove}
+        onMouseOut={() => { mousePosRef.current = null; setMouseInfo(null); }}
+        onClick={() => setSelectedCity(null)}
+        onLoad={handleLoad}
+        style={{ width: "100%", height: "100%" }}
+        mapStyle="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+        minZoom={1.5}
+        maxZoom={10}
+        attributionControl={false}
+      >
+        {/* 时区线 */}
+        <Source id="timezone-lines" type="geojson" data={timezoneLines}>
+          <Layer {...timezoneLineLayer} />
+        </Source>
+        
+        {/* 时区标签 */}
+        {timezoneLabelsData && (
+          <Source id="timezone-labels" type="geojson" data={timezoneLabelsData}>
+            <Layer {...timezoneLabelLayer} />
+          </Source>
+        )}
+        
+        {/* 城市标记 */}
+        {allCities.map((city) => (
+          <CityMarker
+            key={city.id}
+            city={city}
+            isSelected={selectedCity?.id === city.id}
+            onClick={(c) => setSelectedCity(prev => prev?.id === c.id ? null : c)}
+            onHover={setHoveredCity}
+          />
+        ))}
+        
+        {/* 弹窗 */}
+        {popupCity && (
+          <Popup
+            longitude={popupCity.lng}
+            latitude={popupCity.lat}
+            anchor="bottom"
+            offset={15}
+            closeButton={false}
+            closeOnClick={false}
+            className="city-popup"
+            onClose={() => {
+              setSelectedCity(null);
+              setHoveredCity(null);
+            }}
+          >
+            <PopupContent 
+              city={popupCity} 
+              onClose={() => {
+                setSelectedCity(null);
+                setHoveredCity(null);
+              }}
+              isMobile={isMobile}
+            />
+          </Popup>
+        )}
+      </Map>
 
       {/* 搜索框 */}
       <div className="search-container">
@@ -574,7 +525,7 @@ export default function WorldMap() {
       )}
 
       {/* 缩放级别显示城市名 */}
-      {zoom >= 4 && (
+      {viewState.zoom >= 4 && (
         <style>{`
           .city-marker-container::after {
             content: attr(data-name);

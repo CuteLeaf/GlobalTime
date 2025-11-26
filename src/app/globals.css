@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "maplibre-gl/dist/maplibre-gl.css";
 
 :root {
   --bg-primary: #0a0a14;
@@ -340,8 +341,9 @@ html, body {
   transition: transform 0.2s ease;
 }
 
-/* ===== MapLibre Popup ===== */
-.city-popup .maplibregl-popup-content {
+/* ===== MapLibre Popup (react-map-gl) ===== */
+.city-popup .maplibregl-popup-content,
+.city-popup .mapboxgl-popup-content {
   background: var(--glass-bg); 
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -363,7 +365,8 @@ html, body {
   }
 }
 
-.city-popup .maplibregl-popup-tip { 
+.city-popup .maplibregl-popup-tip,
+.city-popup .mapboxgl-popup-tip { 
   border-top-color: var(--glass-bg); 
 }
 
@@ -545,11 +548,14 @@ html, body {
 
 /* ===== MapLibre Overrides ===== */
 .maplibregl-ctrl-attrib,
-.maplibregl-ctrl-logo {
+.maplibregl-ctrl-logo,
+.mapboxgl-ctrl-attrib,
+.mapboxgl-ctrl-logo {
   display: none !important;
 }
 
-.maplibregl-canvas { 
+.maplibregl-canvas,
+.mapboxgl-canvas { 
   outline: none; 
 }
 
@@ -1068,6 +1074,11 @@ html, body {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+.converter-header h2 .title-icon {
+  -webkit-text-fill-color: initial;
+  background: none;
 }
 
 .converter-header p {
