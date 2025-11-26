@@ -78,11 +78,7 @@ export default function TimeConverter() {
     if (!sourceDate || !sourceTime) return;
 
     try {
-      // 构造源时区的时间
-      const sourceDateTimeStr = `${sourceDate}T${sourceTime}:00`;
-      const sourceDateTime = new Date(sourceDateTimeStr);
-
-      // 获取源时区的时间戳
+      // 获取这个时间在源时区的表示
       const sourceFormatter = new Intl.DateTimeFormat("en-US", {
         timeZone: sourceTimezone,
         year: "numeric",
@@ -93,20 +89,50 @@ export default function TimeConverter() {
         second: "2-digit",
         hour12: false,
       });
-
-      // 解析输入的时间在源时区的实际时间戳
-      const parts = sourceFormatter.formatToParts(sourceDateTime);
-      const year = parts.find((p) => p.type === "year")?.value;
-      const month = parts.find((p) => p.type === "month")?.value;
-      const day = parts.find((p) => p.type === "day")?.value;
-      const hour = parts.find((p) => p.type === "hour")?.value;
-      const minute = parts.find((p) => p.type === "minute")?.value;
-
-      // 创建源时区的准确时间
-      const sourceInUTC = new Date(`${year}-${month}-${day}T${hour}:${minute}:00Z`);
-      const localInUTC = new Date(sourceFormatter.format(sourceDateTime));
-      const offset = sourceInUTC.getTime() - localInUTC.getTime();
-      const actualTimestamp = sourceDateTime.getTime() - offset;
+      
+      // 获取源时区相对于 UTC 的偏移
+      // 通过比较同一个时间戳在源时区和 UTC 的表示来计算偏移
+      const utcDate = new Date(Date.UTC(
+        parseInt(sourceDate.split('-')[0]),
+        parseInt(sourceDate.split('-')[1]) - 1,
+        parseInt(sourceDate.split('-')[2]),
+        parseInt(sourceTime.split(':')[0]),
+        parseInt(sourceTime.split(':')[1]),
+        0
+      ));
+      
+      // 获取 UTC 时间在源时区的显示
+      const sourceTimeStr = sourceFormatter.format(utcDate);
+      
+      // 解析源时区的时间字符串
+      const sourceMatch = sourceTimeStr.match(/(\d+)\/(\d+)\/(\d+),?\s+(\d+):(\d+):(\d+)/);
+      if (!sourceMatch) {
+        throw new Error("无法解析源时区时间");
+      }
+      
+      const [, srcMonth, srcDay, srcYear, srcHour, srcMinute] = sourceMatch;
+      
+      // 计算偏移量：我们想要的时间 - 源时区显示的时间
+      const wantedTime = new Date(
+        parseInt(sourceDate.split('-')[0]),
+        parseInt(sourceDate.split('-')[1]) - 1,
+        parseInt(sourceDate.split('-')[2]),
+        parseInt(sourceTime.split(':')[0]),
+        parseInt(sourceTime.split(':')[1]),
+        0
+      ).getTime();
+      
+      const sourceDisplayTime = new Date(
+        parseInt(srcYear),
+        parseInt(srcMonth) - 1,
+        parseInt(srcDay),
+        parseInt(srcHour),
+        parseInt(srcMinute),
+        0
+      ).getTime();
+      
+      const offset = wantedTime - sourceDisplayTime;
+      const actualTimestamp = utcDate.getTime() + offset;
 
       // 转换到本地时区
       const localDate = new Date(actualTimestamp);
@@ -159,9 +185,6 @@ export default function TimeConverter() {
       if (!sourceDate || !sourceTime) return;
 
       try {
-        const sourceDateTimeStr = `${sourceDate}T${sourceTime}:00`;
-        const sourceDateTime = new Date(sourceDateTimeStr);
-
         const sourceFormatter = new Intl.DateTimeFormat("en-US", {
           timeZone: sourceTimezone,
           year: "numeric",
@@ -172,18 +195,42 @@ export default function TimeConverter() {
           second: "2-digit",
           hour12: false,
         });
-
-        const parts = sourceFormatter.formatToParts(sourceDateTime);
-        const year = parts.find((p) => p.type === "year")?.value;
-        const month = parts.find((p) => p.type === "month")?.value;
-        const day = parts.find((p) => p.type === "day")?.value;
-        const hour = parts.find((p) => p.type === "hour")?.value;
-        const minute = parts.find((p) => p.type === "minute")?.value;
-
-        const sourceInUTC = new Date(`${year}-${month}-${day}T${hour}:${minute}:00Z`);
-        const localInUTC = new Date(sourceFormatter.format(sourceDateTime));
-        const offset = sourceInUTC.getTime() - localInUTC.getTime();
-        const actualTimestamp = sourceDateTime.getTime() - offset;
+        
+        const utcDate = new Date(Date.UTC(
+          parseInt(sourceDate.split('-')[0]),
+          parseInt(sourceDate.split('-')[1]) - 1,
+          parseInt(sourceDate.split('-')[2]),
+          parseInt(sourceTime.split(':')[0]),
+          parseInt(sourceTime.split(':')[1]),
+          0
+        ));
+        
+        const sourceTimeStr = sourceFormatter.format(utcDate);
+        const sourceMatch = sourceTimeStr.match(/(\d+)\/(\d+)\/(\d+),?\s+(\d+):(\d+):(\d+)/);
+        if (!sourceMatch) return;
+        
+        const [, srcMonth, srcDay, srcYear, srcHour, srcMinute] = sourceMatch;
+        
+        const wantedTime = new Date(
+          parseInt(sourceDate.split('-')[0]),
+          parseInt(sourceDate.split('-')[1]) - 1,
+          parseInt(sourceDate.split('-')[2]),
+          parseInt(sourceTime.split(':')[0]),
+          parseInt(sourceTime.split(':')[1]),
+          0
+        ).getTime();
+        
+        const sourceDisplayTime = new Date(
+          parseInt(srcYear),
+          parseInt(srcMonth) - 1,
+          parseInt(srcDay),
+          parseInt(srcHour),
+          parseInt(srcMinute),
+          0
+        ).getTime();
+        
+        const offset = wantedTime - sourceDisplayTime;
+        const actualTimestamp = utcDate.getTime() + offset;
 
         const now = getNow();
         const diff = actualTimestamp - now.getTime();
