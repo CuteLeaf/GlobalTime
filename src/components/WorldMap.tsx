@@ -150,10 +150,37 @@ export default function WorldMap() {
 
   useEffect(() => { setMounted(true); }, []);
 
+  // 更新时区标签位置和时间
+  const updateTimezoneLabels = useCallback(() => {
+    if (!map.current || !map.current.getSource("timezone-labels")) return;
+    
+    const bounds = map.current.getBounds();
+    const topLat = Math.min(bounds.getNorth() - 5, 80); // 距离顶部留一点边距
+    
+    const timezoneLabels: GeoJSON.Feature[] = [];
+    for (let lng = -180; lng <= 180; lng += 15) {
+      const offset = lng / 15;
+      const offsetStr = offset >= 0 ? `+${offset}` : `${offset}`;
+      const timeInfo = formatTimeForOffset(lng);
+      
+      timezoneLabels.push({
+        type: "Feature",
+        properties: { 
+          offset: `UTC${offsetStr}\n${timeInfo.time.slice(0, 5)}`,
+          lng: lng,
+        },
+        geometry: { type: "Point", coordinates: [lng, topLat] },
+      });
+    }
+    
+    (map.current.getSource("timezone-labels") as maplibregl.GeoJSONSource).setData({
+      type: "FeatureCollection",
+      features: timezoneLabels,
+    });
+  }, []);
+
   // 统一更新所有标记和弹窗（性能优化：单个定时器）
   const updateAllMarkers = useCallback(() => {
-    const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
-    
     markersRef.current.forEach(({ element, city, popup }) => {
       const info = formatTime(city.timezone);
       const innerColor = info.isDay ? "#fbbf24" : "#818cf8";
@@ -277,18 +304,56 @@ export default function WorldMap() {
         }
       });
       
-      // 时区线
+      // 时区线和标签
       const timezoneLines: GeoJSON.Feature[] = [];
+      const timezoneLabels: GeoJSON.Feature[] = [];
+      
       for (let lng = -180; lng <= 180; lng += 15) {
+        const offset = lng / 15;
+        const offsetStr = offset >= 0 ? `+${offset}` : `${offset}`;
+        
         timezoneLines.push({
-          type: "Feature", properties: {},
+          type: "Feature",
+          properties: { offset: offsetStr },
           geometry: { type: "LineString", coordinates: [[lng, -85], [lng, 85]] },
         });
+        
+        // 在顶部添加时区标签
+        timezoneLabels.push({
+          type: "Feature",
+          properties: { 
+            offset: `UTC${offsetStr}`,
+            lng: lng,
+          },
+          geometry: { type: "Point", coordinates: [lng, 75] },
+        });
       }
+      
       m.addSource("timezone-lines", { type: "geojson", data: { type: "FeatureCollection", features: timezoneLines } });
       m.addLayer({
         id: "timezone-lines", type: "line", source: "timezone-lines",
-        paint: { "line-color": "rgba(255, 255, 255, 0.08)", "line-width": 1, "line-dasharray": [2, 4] },
+        paint: { "line-color": "rgba(255, 255, 255, 0.1)", "line-width": 1, "line-dasharray": [3, 6] },
+      });
+      
+      // 时区标签图层
+      m.addSource("timezone-labels", { type: "geojson", data: { type: "FeatureCollection", features: timezoneLabels } });
+      m.addLayer({
+        id: "timezone-labels",
+        type: "symbol",
+        source: "timezone-labels",
+        layout: {
+          "text-field": ["get", "offset"],
+          "text-size": 10,
+          "text-anchor": "center",
+          "text-allow-overlap": true,
+          "text-line-height": 1.3,
+          "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"],
+        },
+        paint: {
+          "text-color": "rgba(255, 255, 255, 0.6)",
+          "text-halo-color": "rgba(0, 0, 0, 0.9)",
+          "text-halo-width": 1.5,
+        },
       });
 
       // 城市标记
@@ -340,6 +405,7 @@ export default function WorldMap() {
 
       // 初始更新
       updateAllMarkers();
+      updateTimezoneLabels();
 
       // 飞到默认位置（如果没有保存状态）
       if (!hasSavedState) {
@@ -367,8 +433,12 @@ export default function WorldMap() {
     m.on("zoomend", () => {
       setZoom(m.getZoom());
       saveMapState();
+      updateTimezoneLabels();
     });
-    m.on("moveend", saveMapState);
+    m.on("moveend", () => {
+      saveMapState();
+      updateTimezoneLabels();
+    });
 
     // 键盘快捷键
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -384,18 +454,20 @@ export default function WorldMap() {
     };
     window.addEventListener("keydown", handleKeyDown);
 
-    // 统一定时器更新所有标记
+    // 定时器：标记每秒更新，时区标签每分钟更新
     updateIntervalRef.current = window.setInterval(updateAllMarkers, 1000);
+    const labelIntervalId = window.setInterval(updateTimezoneLabels, 60000);
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
+      clearInterval(labelIntervalId);
       markersRef.current.forEach(({ marker, popup }) => { marker.remove(); popup.remove(); });
       markersRef.current = [];
       m.remove();
       map.current = null;
     };
-  }, [mounted, updateAllMarkers, saveMapState]);
+  }, [mounted, updateAllMarkers, updateTimezoneLabels, saveMapState]);
 
 
   if (!mounted) {
