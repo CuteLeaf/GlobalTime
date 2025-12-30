@@ -32,11 +32,23 @@ interface CityData {
   timezone: string;
 }
 
+// 国家名称映射 - 用于自定义显示的国家名称
+const countryNameMap: Record<string, string> = {
+  "Taiwan": "China Taiwan",
+  "Hong Kong S.A.R.": "China Hong Kong S.A.R.",
+  // 可以继续添加其他需要修改的国家名称
+};
+
 // 从 city-timezones 查找精选城市
 const findCity = (name: string): CityData | undefined => {
-  return ct.cityMapping.find((c: CityData) => 
+  return ct.cityMapping.find((c: CityData) =>
     c.city === name || c.city_ascii === name
   );
+};
+
+// 获取映射后的国家名称
+const getMappedCountry = (country: string): string => {
+  return countryNameMap[country] || country;
 };
 
 export const featuredCities: TimezoneCity[] = featuredCityNames
@@ -51,7 +63,7 @@ export const featuredCities: TimezoneCity[] = featuredCityNames
       timezone: city.timezone,
       lat: city.lat,
       lng: city.lng,
-      country: city.country,
+      country: getMappedCountry(city.country),
       countryCode: iso2
     };
   });
@@ -69,7 +81,7 @@ const allCities = rawCities
       timezone: city.timezone,
       lat: city.lat,
       lng: city.lng,
-      country: city.country,
+      country: getMappedCountry(city.country),
       countryCode: iso2
     };
   });
