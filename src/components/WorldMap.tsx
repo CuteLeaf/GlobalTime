@@ -124,10 +124,9 @@ interface CityMarkerProps {
   city: TimezoneCity;
   isSelected: boolean;
   onClick: (city: TimezoneCity) => void;
-  onHover: (city: TimezoneCity | null) => void;
 }
 
-function CityMarker({ city, isSelected, onClick, onHover }: CityMarkerProps) {
+function CityMarker({ city, isSelected, onClick }: CityMarkerProps) {
   const [info, setInfo] = useState(() => formatTime(city.timezone));
   
   useEffect(() => {
@@ -138,7 +137,7 @@ function CityMarker({ city, isSelected, onClick, onHover }: CityMarkerProps) {
   }, [city.timezone]);
   
   const innerColor = info.isDay ? "#fbbf24" : "#818cf8";
-  const ringClass = info.dayLabel 
+  const ringClass = info.dayLabel
     ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday")
     : "";
   
@@ -152,16 +151,14 @@ function CityMarker({ city, isSelected, onClick, onHover }: CityMarkerProps) {
         onClick(city);
       }}
     >
-      <div 
+      <div
         className="city-marker-container"
         data-name={city.name}
-        onMouseEnter={() => onHover(city)}
-        onMouseLeave={() => !isSelected && onHover(null)}
       >
         <div className={`marker-wrapper ${ringClass}`}>
           {ringClass && <div className="marker-ring" />}
-          <div 
-            className="marker-dot" 
+          <div
+            className="marker-dot"
             style={{ background: innerColor, boxShadow: `0 0 12px ${innerColor}` }}
           />
         </div>
@@ -179,6 +176,7 @@ interface PopupContentProps {
 
 function PopupContent({ city, onClose, isMobile }: PopupContentProps) {
   const [info, setInfo] = useState(() => formatTime(city.timezone));
+  const [copied, setCopied] = useState(false);
   
   useEffect(() => {
     const interval = setInterval(() => {
@@ -187,9 +185,19 @@ function PopupContent({ city, onClose, isMobile }: PopupContentProps) {
     return () => clearInterval(interval);
   }, [city.timezone]);
   
-  const labelClass = info.dayLabel 
-    ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday") 
+  const labelClass = info.dayLabel
+    ? (info.dayLabel.includes("明") || info.dayLabel.includes("+") ? "tomorrow" : "yesterday")
     : "";
+  
+  const handleCopyTimezone = async () => {
+    try {
+      await navigator.clipboard.writeText(city.timezone);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("复制失败:", err);
+    }
+  };
   
   return (
     <div className="popup-content">
@@ -209,6 +217,16 @@ function PopupContent({ city, onClose, isMobile }: PopupContentProps) {
       <div className="time-display">
         <span className="time">{info.time}</span>
         <span className="date">{info.date}</span>
+      </div>
+      <div className="timezone-display">
+        <span className="timezone-name">{city.timezone}</span>
+        <button
+          className={`copy-timezone-btn ${copied ? "copied" : ""}`}
+          onClick={handleCopyTimezone}
+          title="复制时区名称"
+        >
+          {copied ? "✓" : "📋"}
+        </button>
       </div>
       <div className="popup-footer">
         <span className="offset">{info.offset}</span>
@@ -230,7 +248,6 @@ export default function WorldMap() {
   const [mouseInfo, setMouseInfo] = useState<{ lat: number; lng: number; time: string; date: string; offset: string; dayLabel: string } | null>(null);
   const mousePosRef = useRef<{ lng: number; lat: number } | null>(null);
   const [selectedCity, setSelectedCity] = useState<TimezoneCity | null>(null);
-  const [hoveredCity, setHoveredCity] = useState<TimezoneCity | null>(null);
   const [dynamicCities, setDynamicCities] = useState<TimezoneCity[]>([]);
   const [timezoneLabelsData, setTimezoneLabelsData] = useState<GeoJSON.FeatureCollection | null>(null);
   
@@ -422,8 +439,8 @@ export default function WorldMap() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // 当前显示的弹窗城市
-  const popupCity = selectedCity || hoveredCity;
+  // 当前显示的弹窗城市 - 只在点击时显示，不响应鼠标悬浮
+  const popupCity = selectedCity;
 
   if (!mounted) {
     return (
@@ -470,7 +487,6 @@ export default function WorldMap() {
             city={city}
             isSelected={selectedCity?.id === city.id}
             onClick={(c) => setSelectedCity(prev => prev?.id === c.id ? null : c)}
-            onHover={setHoveredCity}
           />
         ))}
         
@@ -486,14 +502,12 @@ export default function WorldMap() {
             className="city-popup"
             onClose={() => {
               setSelectedCity(null);
-              setHoveredCity(null);
             }}
           >
-            <PopupContent 
-              city={popupCity} 
+            <PopupContent
+              city={popupCity}
               onClose={() => {
                 setSelectedCity(null);
-                setHoveredCity(null);
               }}
               isMobile={isMobile}
             />
