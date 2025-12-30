@@ -122,11 +122,10 @@ function getLabelField(): string {
 // 城市标记组件
 interface CityMarkerProps {
   city: TimezoneCity;
-  isSelected: boolean;
   onClick: (city: TimezoneCity) => void;
 }
 
-function CityMarker({ city, isSelected, onClick }: CityMarkerProps) {
+function CityMarker({ city, onClick }: CityMarkerProps) {
   const [info, setInfo] = useState(() => formatTime(city.timezone));
   
   useEffect(() => {
@@ -485,7 +484,6 @@ export default function WorldMap() {
           <CityMarker
             key={city.id}
             city={city}
-            isSelected={selectedCity?.id === city.id}
             onClick={(c) => setSelectedCity(prev => prev?.id === c.id ? null : c)}
           />
         ))}
